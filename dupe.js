@@ -22,28 +22,38 @@ module.exports.dupe = async function (bot) {
             const itemData = ITEMS_TO_REFILL[key];
             const itemCount = bot.inventory.count(mcData.itemsByName[itemData.name].id);
 
-            if (itemCount <= 2) {
+            if (itemCount <= 10) {
                 console.log(`Low on ${itemData.name}, refilling...`);
-                await openShulkerAndGrab(itemData, itemCount, bot);
+                await openShulkerAndGrab(itemData, bot);
             }
         }
         await eatGoldenApple(bot);
         await checkArmorAndUseXP(bot);
-        // Place a chest at the target position
-        try {
-            const chestItem = bot.inventory.findInventoryItem(mcData.itemsByName.chest.id);
-            if (chestItem) {
+
+        let chestAttempts = 0;
+        while (chestAttempts < 3) {
+            try {
+                const chestBlock = bot.blockAt(chestPos);
+                if (chestBlock && chestBlock.name === 'chest') {
+                    console.log("Chest already exists at the target position. Skipping placement.");
+                    break;
+                }
+
+                const chestItem = bot.inventory.findInventoryItem(mcData.itemsByName.chest.id);
+                if (!chestItem) {
+                    console.log("No chest in inventory.");
+                    break;
+                }
                 await bot.equip(chestItem, 'hand');
                 await bot.placeBlock(bot.blockAt(chestPos.offset(0, -1, 0)), new Vec3(0, 1, 0));
                 console.log('Chest placed!');
-                await delay(300);
-            } else {
-                console.log("No chest in inventory.");
-                return;
+                await delay(200);
+                break; // Exit loop if successful
+            } catch (err) {
+                chestAttempts++;
+                console.log(`Attempt ${chestAttempts}: Failed to place chest - ${err.message}`);
+                await delay(300); // Wait before retrying
             }
-        } catch (err) {
-            console.log(`Error placing chest: ${err.message}`);
-            return;
         }
         bot.setControlState('forward', true);
         await delay(300);
@@ -52,26 +62,24 @@ module.exports.dupe = async function (bot) {
         try {
             let container = await bot.openContainer(bot.blockAt(chestPos));
             console.log("Chest opened. Depositing all items...");
-
-            let items = bot.inventory.items().filter(item => item.name.includes("shulker_box"));
-            for (let i = 0; i < items.length; i++) {
-                try {
-                    await container.deposit(items[i].type, null, items[i].count);
-                    console.log(`Deposited ${items[i].name} x${items[i].count}`);
+            try {
+                let shulkerItems = bot.inventory.items().filter(item => item.name.includes("shulker_box"));
+                for (let i = 0; i < shulkerItems.length; i++) {
+                    await container.deposit(shulkerItems[i].type, null, shulkerItems[i].count);
                     if ((i + 1) % 6 === 0) {
-                        await delay(400); // Prevents packet spam
+                        await delay(400);
                     }
-                } catch (depositError) {
-                    if (depositError.message.includes("full") || depositError.message.includes("no space")) {
-                        console.log("Chest is full. Continuing execution...");
-                        break;
-                    } else {
-                        throw depositError;
-                    }
+                }
+            } catch (error) {
+                if (error.message.includes("destination full")) {
+                    console.warn("Destination full!");
+                } else {
+                    throw error;
                 }
             }
 
             await container.close();
+            await delay(200);
             console.log("Finished depositing items.");
         } catch (err) {
             console.log(`Error opening chest: ${err.message}`);
@@ -84,7 +92,6 @@ module.exports.dupe = async function (bot) {
                 console.log("End Crystal can only be placed on Obsidian or Bedrock!");
                 return;
             }
-
             const endCrystal = bot.inventory.findInventoryItem(mcData.itemsByName.end_crystal.id);
             if (endCrystal) {
                 await bot.equip(endCrystal, 'hand');
@@ -104,6 +111,7 @@ module.exports.dupe = async function (bot) {
             if (axeItem) {
                 await bot.equip(axeItem, 'hand');
                 console.log("Netherite axe equipped.");
+                await delay(1000);
             } else {
                 console.log("No netherite axe in inventory.");
             }
@@ -115,7 +123,6 @@ module.exports.dupe = async function (bot) {
         try {
             await bot.lookAt(crystalPos.offset(0, 1, 0));
             console.log("Looking at End Crystal.");
-            await delay(300);
         } catch (err) {
             console.log(`Error looking at End Crystal: ${err.message}`);
         }
@@ -161,42 +168,45 @@ module.exports.dupe = async function (bot) {
 
     }
 };
-async function openShulkerAndGrab(itemData, currentCount, bot) {
+async function openShulkerAndGrab(itemData, bot) {
     try {
         // Check if inventory is full before opening the shulker
         console.log(bot.inventory.items().length);
         if (bot.inventory.items().length >= 36) {
-
             console.log("Inventory is full, dropping shulker boxes...");
-            
             let items = bot.inventory.items().filter(item => item.name.includes("shulker_box"));
+            items.forEach(item => console.log(item.name));
             let droppedCount = 0;
-            
             for (const dropItem of items) {
-
+                console.log(`Dropping item ${dropItem.name}`);
                 await bot.lookAt(bot.entity.position.offset(1, 0, 0)); // Look east
-                let dropAmount = Math.min(5, dropItem.count); // Drop up to 5
-                await bot.toss(dropItem.id, null, dropAmount);
-                console.log(`Dropped ${dropAmount} of ${dropItem.name}.`);
+                await bot.toss(dropItem.type, null, 1);
+                console.log(`Dropped 1 of ${dropItem.name}.`);
                 droppedCount++;
-                if (droppedCount >= 10) break; // Stop after dropping 5 items
+                if (droppedCount >= 20) break; // Stop after dropping 10 items
             }
         }
-
         const block = bot.blockAt(itemData.shulkerPos);
-
         if (!block) {
             console.log(`Shulker box not found at ${itemData.shulkerPos}`);
             return;
         }
+        let shulker;
+        let attempts = 0;
+        const maxRetries = 5;
+        const delay = 1000; // 1 second delay
+        while (attempts < maxRetries) {
+            shulker = await bot.openContainer(block);
+            if (shulker) break; // Successfully opened
 
-        const shulker = await bot.openContainer(block);
-
+            console.log(`Failed to open shulker. Retrying... (${attempts + 1}/${maxRetries})`);
+            attempts++;
+            await new Promise(resolve => setTimeout(resolve, delay)); // Wait before retrying
+        }
         if (!shulker) {
-            console.log("Failed to open shulker.");
+            console.log("Failed to open shulker after multiple attempts.");
             return;
         }
-
         const item = shulker.containerItems().find(i => i.name === itemData.name);
 
         if (!item) {
@@ -208,15 +218,16 @@ async function openShulkerAndGrab(itemData, currentCount, bot) {
         // Find a slot where the bot already has this item
         const botItemSlot = bot.inventory.items().find(i => i.name === itemData.name);
 
-        // If the bot has this item in its inventory, calculate how much can fit in that slot
-        let maxStackSize = bot.registry.items[item.type]?.stackSize || 64;
-        let availableSpace = botItemSlot ? maxStackSize - botItemSlot.count : maxStackSize;
+        let availableSpace;
+        if (botItemSlot) {
+            availableSpace = 64 - botItemSlot.count;
+        } else {
+            availableSpace = 64;
+        }
+        console.log(availableSpace);
         
-        // If the bot can store more of the item in the same slot
-        let amountToTransfer = Math.min(availableSpace, item.count);
-        
-            await shulker.withdraw(item.type, null, amountToTransfer);
-            console.log(`Refilled ${itemData.name} by ${amountToTransfer} items.`);
+        await shulker.withdraw(item.type, null, availableSpace);
+        console.log(`Refilled ${itemData.name} by ${availableSpace} items.`);
         await shulker.close();
 
     } catch (error) {
@@ -253,7 +264,6 @@ async function checkArmorAndUseXP(bot) {
             await useXPBottles(bot); // Ensure XP bottles are fully used before proceeding
         }
     }
-
     console.log("Armor check complete. Proceeding with further execution.");
 }
 
@@ -263,16 +273,13 @@ async function useXPBottles(bot) {
 
     try {
         await bot.equip(xpBottle, 'hand');
-        await bot.look(0, 90, false);
+        await bot.look(0, 90, true);
 
-        for (let i = 0; i < 62; i++) {
+        for (let i = 0; i < 55; i++) {
             bot.activateItem(); // Start using XP bottle
-            await new Promise(resolve => setTimeout(resolve, 200)); // Short delay for throwing
-            bot.deactivateItem(); // Stop using XP bottle
+            await new Promise(resolve => setTimeout(resolve, 50)); // Short delay for throwing
         }
-
-        console.log("Used exactly 62 XP bottles!");
-
+        console.log("Used exactly 32 XP bottles!");
     } catch (err) {
         console.log("Error using XP bottles:", err);
     }
